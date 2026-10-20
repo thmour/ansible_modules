@@ -14,6 +14,7 @@ DOCUMENTATION = """
         - Sander Steffann (@steffann)
         - Douglas Heriot (@DouglasHeriot)
         - Thore Knickrehm (@tkn2023)
+        - Theofilos Mouratidis (@thmour)
     short_description: NetBox inventory source
     description:
         - Get inventory hosts from NetBox
@@ -784,11 +785,20 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
     def extract_device_role(self, host):
         try:
             if "device_role" in host:
-                return self._pluralize(
-                    self.device_roles_lookup[host["device_role"]["id"]]
-                )
+                role_key = "device_role"
             elif "role" in host:
-                return self._pluralize(self.device_roles_lookup[host["role"]["id"]])
+                role_key = "role"
+            else:
+                return
+
+            if self.api_version >= version.parse("4.3.0"):
+                return self._objects_array_following_parents(
+                    initial_object_id=host[role_key]["id"],
+                    object_lookup=self.device_roles_lookup,
+                    object_parent_lookup=self.device_roles_parent_lookup,
+                )
+            else:
+                return self._pluralize(self.device_roles_lookup[host[role_key]["id"]])
         except Exception:
             return
 
@@ -1284,6 +1294,17 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         self.device_roles_lookup = dict(
             (device_role["id"], device_role["slug"]) for device_role in device_roles
         )
+
+        # Handle nested device roles
+        if self.api_version >= version.parse("4.3.0"):
+            def get_device_role_parent(device_role):
+                try:
+                    return (device_role["id"], device_role["parent"]["id"])
+                except Exception:
+                    return (device_role["id"], None)
+
+            # Dictionary of device_role id to parent device_role id
+            self.device_roles_parent_lookup = dict(filter(lambda x: x is not None, map(get_device_role_parent, device_roles)))
 
     def refresh_device_types_lookup(self):
         url = self.api_endpoint + "/api/dcim/device-types/?limit=0"
@@ -1836,7 +1857,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         for grouping in self.group_by:
             # Don't handle regions here since no hosts are ever added to region groups
             # Sites and locations are also specially handled in the main()
-            if grouping in ["region", site_group_by, "location", site_group_group_by]:
+            if grouping in ["region", site_group_by, "location", site_group_group_by, "device_role"]:
                 continue
 
             if grouping not in self.group_extractors:
@@ -1935,6 +1956,22 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
             self.inventory.add_child(
                 site_transformed_group_name, self.location_group_names[location_id]
+            )
+
+    # Create nested device roles if supported by netbox version (> 4.3.0)
+    def _add_device_role_groups(self):
+        self.device_roles_names = self._setup_nested_groups(
+            "device_role", self.device_roles_lookup, self.device_roles_parent_lookup
+        )
+
+        for device_role_id, _ in self.device_roles_lookup.items():
+            device_role_parent_id = self.device_roles_parent_lookup.get(device_role_id, None)
+            if device_role_parent_id is None:
+                continue
+
+            self.inventory.add_child(
+                self.device_roles_names[device_role_parent_id],
+                self.device_roles_names[device_role_id],
             )
 
     def _setup_nested_groups(self, group, lookup, parent_lookup):
@@ -2085,6 +2122,11 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         if "site_group" in self.group_by and self.api_version >= version.parse("2.11"):
             self._add_site_group_groups()
 
+        # Nested device roles
+        if self.api_version >= version.parse("4.3.0"):
+            if "device_role" in self.group_by or "device_roles" in self.group_by:
+                self._add_device_role_groups()
+
         for host in chain(self.devices_list, self.vms_list):
             virtual_chassis_master = self._get_host_virtual_chassis_master(host)
             if (
@@ -2127,6 +2169,12 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                 # Add host to site group when host is NOT assigned to a location
                 self.inventory.add_host(
                     group=self.site_group_names[host["site"]["id"]],
+                    host=hostname,
+                )
+
+            if getattr(self, "device_roles_names", None):
+                self.inventory.add_host(
+                    group=self.device_roles_names[host["role"]["id"]],
                     host=hostname,
                 )
 
