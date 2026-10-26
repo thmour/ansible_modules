@@ -1,0 +1,9 @@
+---
+plugin: netbox.netbox.nb_inventory
+api_endpoint: http://localhost:32768
+token: "0123456789abcdef0123456789abcdef01234567"
+validate_certs: false
+nested_device_roles: true
+
+group_by:
+  - device_roles
