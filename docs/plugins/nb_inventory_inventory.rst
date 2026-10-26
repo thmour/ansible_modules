@@ -949,6 +949,56 @@ Parameters
   * - .. raw:: html
 
         <div class="ansible-option-cell">
+        <div class="ansibleOptionAnchor" id="parameter-nested_device_roles"></div>
+
+      .. _ansible_collections.netbox.netbox.nb_inventory_inventory__parameter-nested_device_roles:
+
+      .. rst-class:: ansible-option-title
+
+      **nested_device_roles**
+
+      .. raw:: html
+
+        <a class="ansibleOptionLink" href="#parameter-nested_device_roles" title="Permalink to this option"></a>
+
+      .. ansible-option-type-line::
+
+        :ansible-option-type:`boolean`
+
+      :ansible-option-versionadded:`added in netbox.netbox 3.21.2`
+
+
+
+
+
+      .. raw:: html
+
+        </div>
+
+    - .. raw:: html
+
+        <div class="ansible-option-cell">
+
+      If :emphasis:`nested\_device\_roles` is enabled, device\_roles will contain also all parent role names.
+
+      If group\_by device\_roles is also set, the parent and child device role relations will also reflect in the ansible groups.
+
+
+      .. rst-class:: ansible-option-line
+
+      :ansible-option-choices:`Choices:`
+
+      - :ansible-option-choices-entry-default:`false` :ansible-option-choices-default-mark:`← (default)`
+      - :ansible-option-choices-entry:`true`
+
+
+      .. raw:: html
+
+        </div>
+
+  * - .. raw:: html
+
+        <div class="ansible-option-cell">
         <div class="ansibleOptionAnchor" id="parameter-follow_redirects"></div>
 
       .. _ansible_collections.netbox.netbox.nb_inventory_inventory__parameter-follow_redirects:

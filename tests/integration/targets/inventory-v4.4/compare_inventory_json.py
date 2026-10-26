@@ -17,7 +17,7 @@ from deepdiff import DeepDiff
 # NetBox includes "created" and "last_updated" times on objects. These end up in the interfaces objects that are included verbatim from the NetBox API.
 # "url" may be different if local tests use a different host/port
 # Remove these from files saved in git as test data
-KEYS_REMOVE = frozenset(["created", "last_updated", "url"])
+KEYS_REMOVE = frozenset(["created", "last_updated", "url", "display_url"])
 
 # Ignore these when performing diffs as they will be different for each test run
 # (Was previously keys specific to NetBox 2.6)

@@ -14,6 +14,7 @@ DOCUMENTATION = """
         - Sander Steffann (@steffann)
         - Douglas Heriot (@DouglasHeriot)
         - Thore Knickrehm (@tkn2023)
+        - Theofilos Mouratidis (@thmour)
     short_description: NetBox inventory source
     description:
         - Get inventory hosts from NetBox
@@ -81,6 +82,14 @@ DOCUMENTATION = """
             default: false
             type: boolean
             version_added: "0.2.1"
+        nested_device_roles:
+            description:
+                - Since Netbox v4.3 device roles can be hierarchical, but for compatibility reasons we keep device roles flat.
+                - If nested_device_roles and plurals are set to true, hosts will contain all parent device role names in an array
+                - If the above conditions are true and grouping_by device_roles/roles is enabled, parent/children device role relation will also reflect in ansible groups
+            default: false
+            type: boolean
+            version_added: "3.22.0"
         token:
             required: false
             description:
@@ -784,11 +793,26 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
     def extract_device_role(self, host):
         try:
             if "device_role" in host:
-                return self._pluralize(
-                    self.device_roles_lookup[host["device_role"]["id"]]
-                )
+                role_key = "device_role"
             elif "role" in host:
-                return self._pluralize(self.device_roles_lookup[host["role"]["id"]])
+                role_key = "role"
+            else:
+                return
+
+            if not self.nested_device_roles:
+                return self._pluralize(self.device_roles_lookup[host[role_key]["id"]])
+            else:
+                root_path = self._objects_array_following_parents(
+                    initial_object_id=host[role_key]["id"],
+                    object_lookup=self.device_roles_lookup,
+                    object_parent_lookup=self.device_roles_parent_lookup,
+                )
+                if self.plurals:
+                    return root_path
+                else:
+                    # root_path[0] or None
+                    return next(iter(root_path), None)
+
         except Exception:
             return
 
@@ -1284,6 +1308,17 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         self.device_roles_lookup = dict(
             (device_role["id"], device_role["slug"]) for device_role in device_roles
         )
+
+        # Handle nested device roles
+        if self.nested_device_roles:
+            def get_device_role_parent(device_role):
+                try:
+                    return (device_role["id"], device_role["parent"]["id"])
+                except Exception:
+                    return (device_role["id"], None)
+
+            # Dictionary of device_role id to parent device_role id
+            self.device_roles_parent_lookup = dict(map(get_device_role_parent, device_roles))
 
     def refresh_device_types_lookup(self):
         url = self.api_endpoint + "/api/dcim/device-types/?limit=0"
@@ -1836,7 +1871,13 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         for grouping in self.group_by:
             # Don't handle regions here since no hosts are ever added to region groups
             # Sites and locations are also specially handled in the main()
-            if grouping in ["region", site_group_by, "location", site_group_group_by]:
+            exclude_groupings = ["region", site_group_by, "location", site_group_group_by]
+
+            if self.nested_device_roles:
+                device_roles_group_by = self._pluralize_group_by("role")
+                exclude_groupings.append(device_roles_group_by)
+
+            if grouping in exclude_groupings:
                 continue
 
             if grouping not in self.group_extractors:
@@ -1935,6 +1976,22 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
             self.inventory.add_child(
                 site_transformed_group_name, self.location_group_names[location_id]
+            )
+
+    # Create nested device roles if supported by netbox version (> 4.3.0)
+    def _add_device_role_groups(self):
+        self.device_roles_names = self._setup_nested_groups(
+            self._pluralize_group_by("role"), self.device_roles_lookup, self.device_roles_parent_lookup
+        )
+
+        for device_role_id, device_role_slug in self.device_roles_lookup.items():
+            device_role_parent_id = self.device_roles_parent_lookup.get(device_role_id, None)
+            if device_role_parent_id is None:
+                continue
+
+            self.inventory.add_child(
+                self.device_roles_names[device_role_parent_id],
+                self.device_roles_names[device_role_id],
             )
 
     def _setup_nested_groups(self, group, lookup, parent_lookup):
@@ -2085,6 +2142,13 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         if "site_group" in self.group_by and self.api_version >= version.parse("2.11"):
             self._add_site_group_groups()
 
+        # Nested device roles
+        if self.nested_device_roles:
+            if self.api_version < version.parse("4.3"):
+                raise Exception("Hierarchical device roles are supported on api versions >=4.3")
+            if self._pluralize_group_by("role") in self.group_by:
+                self._add_device_role_groups()
+
         for host in chain(self.devices_list, self.vms_list):
             virtual_chassis_master = self._get_host_virtual_chassis_master(host)
             if (
@@ -2129,6 +2193,18 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                     group=self.site_group_names[host["site"]["id"]],
                     host=hostname,
                 )
+
+            if getattr(self, "device_roles_names", None):
+                if host.get("role"):
+                    self.inventory.add_host(
+                        group=self.device_roles_names[host["role"]["id"]],
+                        host=hostname,
+                    )
+                if host.get("device_role"):
+                    self.inventory.add_host(
+                        group=self.device_roles_names[host["device_role"]["id"]],
+                        host=hostname,
+                    )
 
     def _set_authorization(self):
         # NetBox access
@@ -2208,6 +2284,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         self.dns_name = self.get_option("dns_name")
         self.ansible_host_dns_name = self.get_option("ansible_host_dns_name")
         self.racks = self.get_option("racks")
+        self.nested_device_roles = self.get_option("nested_device_roles")
 
         # Compile regular expressions, if any
         self.rename_variables = self.parse_rename_variables(

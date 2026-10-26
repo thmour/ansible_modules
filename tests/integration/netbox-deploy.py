@@ -39,6 +39,7 @@ def make_netbox_calls(endpoint, payload):
     try:
         created = endpoint.create(payload)
     except pynetbox.RequestError as e:
+        print(endpoint.name, payload)
         print(e.error)
         ERRORS = True
         return
@@ -263,10 +264,35 @@ device_roles = [
         "vm_role": True,
     },
 ]
+if nb_version >= version.parse("4.3"):
+    make_netbox_calls(nb.dcim.device_roles, {
+        "name": "Switch",
+        "slug": "switch",
+        "color": "aa1409",
+        "vm_role": False,
+    })
+    switch = nb.dcim.device_roles.get(slug="switch")
+    device_roles.extend([
+        {
+            "name": "Leaf Switch",
+            "slug": "spine-switch",
+            "parent": switch.id,
+            "color": "aa1409",
+            "vm_role": False,
+        },
+        {
+            "name": "Management Switch",
+            "slug": "mgmt-switch",
+            "parent": switch.id,
+            "color": "aa1409",
+            "vm_role": False,
+        },
+    ])
+    device_roles[0]["parent"] = switch.id
+
 created_device_roles = make_netbox_calls(nb.dcim.device_roles, device_roles)
 # Device role variables to be used later on
 core_switch = nb.dcim.device_roles.get(slug="core-switch")
-
 
 # Create Rack Groups
 rack_groups = [
@@ -274,31 +300,36 @@ rack_groups = [
     {"name": "Parent Rack Group", "slug": "parent-rack-group", "site": test_site.id},
 ]
 if nb_version >= version.parse("2.11"):
-    created_rack_groups = make_netbox_calls(nb.dcim.locations, rack_groups)
+    make_netbox_calls(nb.dcim.locations, rack_groups)
+    child_rack_group = nb.dcim.locations.get(slug="test-rack-group")
+    parent_rack_group = nb.dcim.locations.get(slug="parent-rack-group")
 else:
-    created_rack_groups = make_netbox_calls(nb.dcim.rack_groups, rack_groups)
+    make_netbox_calls(nb.dcim.rack_groups, rack_groups)
+    child_rack_group = nb.dcim.rack_groups.get(slug="test-rack-group")
+    parent_rack_group = nb.dcim.rack_groups.get(slug="parent-rack-group")
 
 # Create Rack Group Parent relationship
-created_rack_groups[0].parent = created_rack_groups[1]
-created_rack_groups[0].save()
+child_rack_group.parent = parent_rack_group.id
+child_rack_group.save()
 
 # Create Rack Roles
 rack_roles = [{"name": "Test Rack Role", "slug": "test-rack-role", "color": "4287f5"}]
-created_rack_roles = make_netbox_calls(nb.dcim.rack_roles, rack_roles)
+make_netbox_calls(nb.dcim.rack_roles, rack_roles)
+rack_role = nb.dcim.rack_roles.get(slug="test-rack-role")
 
 # Create Racks
 racks = [
     {
         "name": "Test Rack Site 2",
         "site": test_site2.id,
-        "role": created_rack_roles[0].id,
+        "role": rack_role.id,
     },
-    {"name": "Test Rack", "site": test_site.id, "group": created_rack_groups[0].id},
+    {"name": "Test Rack", "site": test_site.id, "group": child_rack_group.id},
 ]
 
 # Use location instead of group for 2.11+
 if nb_version >= version.parse("2.11"):
-    racks[1]["location"] = created_rack_groups[0].id
+    racks[1]["location"] = child_rack_group.id
     del racks[1]["group"]
 
 created_racks = make_netbox_calls(nb.dcim.racks, racks)
@@ -349,9 +380,9 @@ devices = [
 
 # Add some locations for 2.11+
 if nb_version >= version.parse("2.11"):
-    devices[0]["location"] = created_rack_groups[0].id
-    devices[1]["location"] = created_rack_groups[0].id
-    devices[3]["location"] = created_rack_groups[0].id
+    devices[0]["location"] = child_rack_group.id
+    devices[1]["location"] = child_rack_group.id
+    devices[3]["location"] = child_rack_group.id
 # TODO: Remove this logic and adjust payload from device_role -> role once Netbox 3.6 or greater is supported.
 if nb_version >= version.parse("3.6"):
     for device in devices:
@@ -373,6 +404,8 @@ nexus_interfaces = [
     {"device": nexus_child.id, "name": "Ethernet2/1", "type": "1000base-t"},
 ]
 created_nexus_interfaces = make_netbox_calls(nb.dcim.interfaces, nexus_interfaces)
+eth11_nexus_interface = nb.dcim.interfaces.get(name="Ethernet1/1")
+eth21_nexus_interface = nb.dcim.interfaces.get(name="Ethernet2/1")
 
 # Create Interfaces
 dev_interfaces = [
@@ -431,18 +464,20 @@ ip_addresses = [
     },
     {
         "address": "172.16.180.11/24",
-        "assigned_object_id": created_nexus_interfaces[0].id,
+        "assigned_object_id": eth11_nexus_interface.id,
         "assigned_object_type": "dcim.interface",
     },
     {
         "address": "172.16.180.12/24",
-        "assigned_object_id": created_nexus_interfaces[1].id,
+        "assigned_object_id": eth21_nexus_interface.id,
         "assigned_object_type": "dcim.interface",
         "dns_name": "nexus.example.com",
     },
     {"address": "172.16.180.254/24"},
 ]
 created_ip_addresses = make_netbox_calls(nb.ipam.ip_addresses, ip_addresses)
+test100_ipv4_addess = nb.ipam.ip_addresses.get(address="172.16.180.1/24")
+test100_ipv6_addess = nb.ipam.ip_addresses.get(address="2001::1:1/64")
 
 # Assign Primary IP
 nexus.update({"primary_ip4": 4})
@@ -566,7 +601,7 @@ services = [
         "name": "http",
         "ports": [80],
         "protocol": "tcp",
-        "ipaddresses": [created_ip_addresses[0].id, created_ip_addresses[1].id],
+        "ipaddresses": [test100_ipv4_addess.id, test100_ipv6_addess.id],
     },
     {"device": nexus.id, "name": "telnet", "ports": [23], "protocol": "tcp"},
     {
@@ -576,6 +611,12 @@ services = [
         "protocol": "tcp",
     },
 ]
+if nb_version >= version.parse("4.3"):
+    for i in range(3):
+        services[i]["parent_object_type"] = "dcim.device"
+        services[i]["parent_object_id"] = services[i].pop("device")
+    services[3]["parent_object_type"] = "virtualization.virtualmachine"
+    services[3]["parent_object_id"] = services[3].pop("virtual_machine")
 created_services = make_netbox_calls(nb.ipam.services, services)
 
 
@@ -607,9 +648,14 @@ circuit_terms = [
         "circuit": test_circuit_two.id,
         "term_side": "A",
         "port_speed": 10000,
-        "site": test_site.id,
     }
 ]
+if nb_version < version.parse("4.3"):
+    circuit_terms[0]["site"] = test_site.id
+else:
+    circuit_terms[0]["termination_type"] = "dcim.site"
+    circuit_terms[0]["termination_id"] = test_site.id
+
 created_circuit_terms = make_netbox_calls(
     nb.circuits.circuit_terminations, circuit_terms
 )
